@@ -125,12 +125,8 @@ def translate_name(name):
 
 @st.cache_data
 def build_elo_model():
-    all_files = glob.glob(os.path.join(DATA_FOLDER, "*.xls"))
-    df_list = []
-    for file in all_files:
-        df = pd.read_html(file)[0]
-        df_list.append(df)
-    combined = pd.concat(df_list, ignore_index=True)
+    csv_path = "basketball_data.csv"
+    combined = pd.read_csv(csv_path)
     combined.columns = ["_".join(col).strip() if isinstance(col, tuple) else col for col in combined.columns]
     df = combined[[
         "Unnamed: 1_level_0_Team",
