@@ -3,13 +3,18 @@ import streamlit as st
 import pandas as pd
 import glob
 import os
+import tempfile
 import requests
 import json
 from datetime import datetime
 
 ODDS_API_KEY = "c2cabc199688380f72d916b3761d6d05"
 DATA_FOLDER = r"C:\Users\jww9t\OneDrive\Desktop\Basketball Scores 21-25"
-TRACKER_FILE = os.path.join(DATA_FOLDER, "pick_tracker.json")
+# Use local path if it exists, otherwise use a temp path for cloud
+if os.path.exists(DATA_FOLDER):
+    TRACKER_FILE = os.path.join(DATA_FOLDER, "pick_tracker.json")
+else:
+    TRACKER_FILE = os.path.join(tempfile.gettempdir(), "pick_tracker.json")
 STARTING_ELO = 1500
 K_FACTOR = 20
 
