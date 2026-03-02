@@ -1,0 +1,12 @@
+{
+  "k_factor": 44.732876273872044,
+  "recency_decay": 0.005996267006638852,
+  "elo_divisor": 10.000002887857999,
+  "kenpom_divisor": 5.000016516343624,
+  "kenpom_weight": 0.39010459991758406,
+  "hca_default": 3.9433891906672063,
+  "form_weight": 13.711527187363622,
+  "last_updated": "2026-03-02",
+  "training_rmse": 12.61,
+  "validation_rmse": 12.29
+}
