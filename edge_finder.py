@@ -8,7 +8,7 @@ import requests
 import json
 from datetime import datetime
 
-ODDS_API_KEY = "c2cabc199688380f72d916b3761d6d05"
+ODDS_API_KEY = "4ad99d9b0d88ecf91a5ae129e36fdf65"
 DATA_FOLDER = r"C:\Users\jww9t\OneDrive\Desktop\Basketball Scores 21-25"
 # Use local path if it exists, otherwise use a temp path for cloud
 if os.path.exists(DATA_FOLDER):
@@ -629,8 +629,15 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
     today = date.today()
     tomorrow = today + timedelta(days=1)
 
+    # Check if API returned valid data
+    if not isinstance(odds_data, list):
+        st.error(f"Odds API error: {odds_data}")
+        return []
+
     edges = []
     for game in odds_data:
+        if not isinstance(game, dict):
+            continue
         # Filter by date
         try:
             game_date = dateutil.parser.parse(game["commence_time"]).date()
@@ -744,28 +751,27 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
             # Check if Action Network has data for this game
             sharp_boost = 0
             for skey, sval in sharp_data.items():
-                home_short = home_kenpom.split()[-1].lower()
-                away_short = away_kenpom.split()[-1].lower()
-                if home_short in skey.lower() and away_short in skey.lower():
-                    if sval['away_bets'] == 0:
+                home_word = home_kenpom.split()[0].lower()
+                away_word = away_kenpom.split()[0].lower()
+                skey_lower = skey.lower()
+                if home_word in skey_lower and away_word in skey_lower:
+                    if sval['away_bets'] is None or sval['home_bets'] is None:
                         break
-                    # Figure out which side our model likes
-                    bet_team = away_kenpom if model_favors == away else home_kenpom
-                    bet_is_away = model_favors == away
-
-                    # Sharp money %
-                    bet_money = sval['away_money'] if bet_is_away else sval['home_money']
-                    bet_bets = sval['away_bets'] if bet_is_away else sval['home_bets']
-                    sharp_diff = bet_money - bet_bets
-
-                    if sharp_diff >= 15:
-                        # Sharp money agrees with our model - boost edge
+                    away_sharp = (sval['away_money'] or 0) - (sval['away_bets'] or 0)
+                    home_sharp = (sval['home_money'] or 0) - (sval['home_bets'] or 0)
+                    if away_sharp >= 15:
+                        sharp_side = away
+                    elif home_sharp >= 15:
+                        sharp_side = home
+                    else:
+                        break
+                    if sharp_side == model_favors:
                         sharp_boost = 2.0
                         note += " ⚡SHARP"
-                    elif sharp_diff <= -15:
-                        # Sharp money disagrees - reduce edge
+                    else:
                         sharp_boost = -2.0
                         note += " ⚠️FADE"
+                    break
                     break
 
             edge_size = round(edge_size + sharp_boost, 1)
@@ -858,7 +864,7 @@ with tab1:
                         "date": datetime.now().strftime("%Y-%m-%d"),
                         "away": e["away"],
                         "home": e["home"],
-                        "edge_team": e["model_favors"] if "UPSET" in e.get("note", "") else (e["away"] if e["model_favors"] == e["home"] else e["home"]),
+                        "edge_team": e["model_favors"] if ("UPSET" in e.get("note", "") or "SHARP" in e.get("note", "")) else (e["away"] if e["model_favors"] == e["home"] else e["home"]),
                         "model_margin": e["model_margin"],
                         "vegas_margin": e["vegas_margin"],
                         "vegas_favors": e["vegas_favors"],
