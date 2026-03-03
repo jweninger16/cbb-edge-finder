@@ -16,7 +16,32 @@ if os.path.exists(DATA_FOLDER):
 else:
     TRACKER_FILE = os.path.join(tempfile.gettempdir(), "pick_tracker.json")
 STARTING_ELO = 1500
-K_FACTOR = 20
+
+# Load optimized parameters from file
+import json as _json
+_params_local = r"C:\Users\jww9t\OneDrive\Desktop\Basketball Scores 21-25\model_params.json"
+_params_cloud = "model_params.json"
+_params_path = _params_local if os.path.exists(_params_local) else _params_cloud
+try:
+    with open(_params_path, 'r') as _f:
+        _p = _json.load(_f)
+    K_FACTOR = _p['k_factor']
+    RECENCY_DECAY = _p['recency_decay']
+    ELO_DIVISOR = _p['elo_divisor']
+    KENPOM_DIVISOR = _p['kenpom_divisor']
+    KENPOM_WEIGHT = _p['kenpom_weight']
+    HCA_DEFAULT = _p['hca_default']
+    FORM_WEIGHT = _p['form_weight']
+    print(f"Loaded optimized params (RMSE: {_p.get('validation_rmse', 'N/A')})")
+except:
+    K_FACTOR = 44.73
+    RECENCY_DECAY = 0.006
+    ELO_DIVISOR = 10.0
+    KENPOM_DIVISOR = 5.0
+    KENPOM_WEIGHT = 0.39
+    HCA_DEFAULT = 3.94
+    FORM_WEIGHT = 13.71
+    print("Using default params")
 
 name_map = {
     "Alabama Crimson Tide": "Alabama",
@@ -489,12 +514,107 @@ def build_elo_model():
         kenpom_raw.columns = ['team', 'conf', 'record', 'adj_em', 'adj_o', 'adj_o_rank', 'adj_d', 'adj_t']
         kenpom_raw['adj_em'] = pd.to_numeric(kenpom_raw['adj_em'], errors='coerce')
         kenpom_dict = dict(zip(kenpom_raw['team'], kenpom_raw['adj_em']))
+        harmonize = {
+            "Alabama State": "Alabama St.", "Alcorn State": "Alcorn St.",
+            "Appalachian State": "Appalachian St.", "Arizona State": "Arizona St.",
+            "Arkansas State": "Arkansas St.", "Ball State": "Ball St.",
+            "Boise State": "Boise St.", "Cal State Bakersfield": "Cal St. Bakersfield",
+            "Cal State Fullerton": "Cal St. Fullerton", "Cal State Northridge": "CSUN",
+            "Central Connecticut State": "Central Connecticut", "Chicago State": "Chicago St.",
+            "Cleveland State": "Cleveland St.", "Colorado State": "Colorado St.",
+            "Coppin State": "Coppin St.", "Delaware State": "Delaware St.",
+            "East Tennessee State": "East Tennessee St.", "Florida State": "Florida St.",
+            "Fresno State": "Fresno St.", "Georgia State": "Georgia St.",
+            "Grambling State": "Grambling St.", "Idaho State": "Idaho St.",
+            "Illinois State": "Illinois St.", "Indiana State": "Indiana St.",
+            "Iowa State": "Iowa St.", "Jackson State": "Jackson St.",
+            "Jacksonville State": "Jacksonville St.", "Kansas State": "Kansas St.",
+            "Kennesaw State": "Kennesaw St.", "Kent State": "Kent St.",
+            "Long Beach State": "Long Beach St.", "Louisiana State": "LSU",
+            "McNeese State": "McNeese", "Michigan State": "Michigan St.",
+            "Mississippi State": "Mississippi St.", "Mississippi Valley State": "Mississippi Valley St.",
+            "Missouri State": "Missouri St.", "Montana State": "Montana St.",
+            "Morehead State": "Morehead St.", "Morgan State": "Morgan St.",
+            "Murray State": "Murray St.", "NC State": "N.C. State",
+            "New Mexico State": "New Mexico St.", "Nicholls State": "Nicholls",
+            "Norfolk State": "Norfolk St.", "North Dakota State": "North Dakota St.",
+            "Northwestern State": "Northwestern St.", "Ohio State": "Ohio St.",
+            "Oklahoma State": "Oklahoma St.", "Oregon State": "Oregon St.",
+            "Penn State": "Penn St.", "Portland State": "Portland St.",
+            "Sacramento State": "Sacramento St.", "Sam Houston State": "Sam Houston St.",
+            "San Diego State": "San Diego St.", "San Jose State": "San Jose St.",
+            "South Carolina State": "South Carolina St.", "South Dakota State": "South Dakota St.",
+            "Southeast Missouri State": "Southeast Missouri", "Southern Mississippi": "Southern Miss",
+            "Tarleton State": "Tarleton St.", "Tennessee State": "Tennessee St.",
+            "Texas State": "Texas St.", "Utah State": "Utah St.",
+            "Washington State": "Washington St.", "Weber State": "Weber St.",
+            "Wichita State": "Wichita St.", "Wright State": "Wright St.",
+            "Youngstown State": "Youngstown St.", "Ole Miss": "Mississippi",
+            "SIU Edwardsville": "SIUE", "Illinois-Chicago": "Illinois Chicago",
+            "St. John's (NY)": "St. John's", "Miami (FL)": "Miami FL",
+            "Miami (OH)": "Miami OH", "St. Mary's (CA)": "Saint Mary's",
+            "Texas A&M-Corpus Christi": "Texas A&M Corpus Chris",
+            "Louisiana-Monroe": "Louisiana Monroe",
+            "Arkansas-Pine Bluff": "Arkansas Pine Bluff",
+            "Texas-Rio Grande Valley": "UT Rio Grande Valley",
+            "Albany (NY)": "Albany", "Brigham Young": "BYU",
+            "UMass": "Massachusetts", "Gardner-Webb": "Gardner Webb",
+            "North Carolina A&T": "North Carolina A&T",
+            "College of Charleston": "Charleston",
+        }
+        for dataset_name, kenpom_name in harmonize.items():
+            if kenpom_name in kenpom_dict:
+                kenpom_dict[dataset_name] = kenpom_dict[kenpom_name]
     except:
         kenpom_dict = {}
-
     return elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict
 
-def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_filter="All"):
+def get_sharp_data():
+    sharp_dict = {}
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.actionnetwork.com/"}
+    from datetime import datetime, timezone, timedelta
+    for delta in [0, 1]:
+        date = (datetime.now(timezone.utc) + timedelta(days=delta)).strftime("%Y%m%d")
+        url = f"https://api.actionnetwork.com/web/v1/scoreboard/ncaab?period=game&bookIds=15&date={date}"
+        try:
+            r = requests.get(url, headers=headers, timeout=5)
+            data = r.json()
+            for game in data.get("games", []):
+                if not game.get("odds"):
+                    continue
+                odds = game["odds"][0]
+                teams = {t["id"]: t["display_name"] for t in game["teams"]}
+                home_name = teams.get(game["home_team_id"], "Home")
+                away_name = teams.get(game["away_team_id"], "Away")
+                away_bets = odds.get("spread_away_public") or 0
+                away_money = odds.get("spread_away_money") or 0
+                home_bets = odds.get("spread_home_public") or 0
+                home_money = odds.get("spread_home_money") or 0
+                if away_bets == 0 and home_bets == 0:
+                    continue
+                away_sharp = away_money - away_bets
+                home_sharp = home_money - home_bets
+                sharp_team = None
+                sharp_diff = 0
+                if abs(away_sharp) >= 15:
+                    sharp_team = away_name
+                    sharp_diff = abs(away_sharp)
+                elif abs(home_sharp) >= 15:
+                    sharp_team = home_name
+                    sharp_diff = abs(home_sharp)
+                key = f"{away_name}_{home_name}"
+                sharp_dict[key] = {
+                    "away_bets": away_bets, "away_money": away_money,
+                    "home_bets": home_bets, "home_money": home_money,
+                    "sharp_team": sharp_team, "sharp_diff": sharp_diff
+                }
+        except:
+            continue
+    return sharp_dict
+
+def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_filter="All", sharp_data=None):
+    if sharp_data is None:
+        sharp_data = {}
     url = "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds"
     params = {
         "apiKey": ODDS_API_KEY,
@@ -517,18 +637,68 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
         except:
             game_date = None
 
-        if date_filter == "Today" and game_date != today:
+        from datetime import datetime, timezone, timedelta
+        game_dt = dateutil.parser.parse(game["commence_time"])
+        now_utc = datetime.now(timezone.utc)
+        hours_until = (game_dt - now_utc).total_seconds() / 3600
+
+        if date_filter == "Today" and not (0 <= hours_until <= 24):
             continue
-        if date_filter == "Tomorrow" and game_date != tomorrow:
+        if date_filter == "Tomorrow" and not (24 < hours_until <= 48):
             continue
 
-        home = translate_name(game["home_team"])
-        away = translate_name(game["away_team"])
+        home_kenpom = translate_name(game["home_team"])
+        away_kenpom = translate_name(game["away_team"])
+
+        # ELO uses Sports Reference names (full "State" not "St.")
+        elo_name_map = {
+            "Iowa St.": "Iowa State", "Michigan St.": "Michigan State",
+            "Florida St.": "Florida State", "Ohio St.": "Ohio State",
+            "Penn St.": "Penn State", "Arizona St.": "Arizona State",
+            "Kansas St.": "Kansas State", "Oklahoma St.": "Oklahoma State",
+            "Oregon St.": "Oregon State", "Washington St.": "Washington State",
+            "Colorado St.": "Colorado State", "Utah St.": "Utah State",
+            "N.C. State": "NC State", "San Diego St.": "San Diego State",
+            "Fresno St.": "Fresno State", "Boise St.": "Boise State",
+            "Ball St.": "Ball State", "Kent St.": "Kent State",
+            "Wright St.": "Wright State", "Wichita St.": "Wichita State",
+            "Weber St.": "Weber State", "Tarleton St.": "Tarleton State",
+            "Tennessee St.": "Tennessee State", "Texas St.": "Texas State",
+            "Missouri St.": "Missouri State", "Montana St.": "Montana State",
+            "Morehead St.": "Morehead State", "Morgan St.": "Morgan State",
+            "Murray St.": "Murray State", "Norfolk St.": "Norfolk State",
+            "North Dakota St.": "North Dakota State", "Northwestern St.": "Northwestern State",
+            "New Mexico St.": "New Mexico State", "Mississippi St.": "Mississippi State",
+            "Louisiana St.": "Louisiana State", "LSU": "Louisiana State",
+            "Long Beach St.": "Long Beach State", "Jacksonville St.": "Jacksonville State",
+            "Jackson St.": "Jackson State", "Idaho St.": "Idaho State",
+            "Illinois St.": "Illinois State", "Indiana St.": "Indiana State",
+            "Georgia St.": "Georgia State", "Grambling St.": "Grambling State",
+            "Delaware St.": "Delaware State", "Coppin St.": "Coppin State",
+            "Cleveland St.": "Cleveland State", "Chicago St.": "Chicago State",
+            "Arkansas St.": "Arkansas State", "Alabama St.": "Alabama State",
+            "Alcorn St.": "Alcorn State", "Appalachian St.": "Appalachian State",
+            "Sacramento St.": "Sacramento State", "Sam Houston St.": "Sam Houston State",
+            "South Carolina St.": "South Carolina State", "South Dakota St.": "South Dakota State",
+            "Portland St.": "Portland State", "Mississippi Valley St.": "Mississippi Valley State",
+            "Kennesaw St.": "Kennesaw State", "Iowa St.": "Iowa State",
+            "SIUE": "SIU Edwardsville", "Illinois Chicago": "Illinois-Chicago",
+            "Saint Mary's": "St. Mary's (CA)", "Miami FL": "Miami (FL)",
+            "Miami OH": "Miami (OH)", "Mississippi": "Ole Miss",
+            "Louisiana Monroe": "Louisiana-Monroe", "Southeast Missouri": "Southeast Missouri State",
+            "Southern Miss": "Southern Mississippi", "Albany": "Albany (NY)",
+            "BYU": "Brigham Young", "Massachusetts": "UMass",
+            "Cal St. Bakersfield": "Cal State Bakersfield",
+            "Cal St. Fullerton": "Cal State Fullerton",
+            "CSUN": "Cal State Northridge",
+        }
+        home = elo_name_map.get(home_kenpom, home_kenpom)
+        away = elo_name_map.get(away_kenpom, away_kenpom)
         try:
             outcomes = game["bookmakers"][0]["markets"][0]["outcomes"]
             spread_dict = {translate_name(o["name"]): o["point"] for o in outcomes}
-            home_spread = spread_dict.get(home)
-            away_spread = spread_dict.get(away)
+            home_spread = spread_dict.get(home_kenpom)
+            away_spread = spread_dict.get(away_kenpom)
             if home_spread is None or away_spread is None:
                 continue
             home_games = game_counts.get(home, 0)
@@ -536,26 +706,24 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
             if home_games < 20 or away_games < 20:
                 continue
             # ELO spread
-            elo_spread = (elo_ratings.get(home, STARTING_ELO) - elo_ratings.get(away, STARTING_ELO)) / 25
+            elo_spread = (elo_ratings.get(home, STARTING_ELO) - elo_ratings.get(away, STARTING_ELO)) / ELO_DIVISOR
 
             # KenPom spread
-            kp_home = kenpom_dict.get(home, None)
-            kp_away = kenpom_dict.get(away, None)
+            kp_home = kenpom_dict.get(home_kenpom, None)
+            kp_away = kenpom_dict.get(away_kenpom, None)
             if kp_home is not None and kp_away is not None:
-                kp_spread = (kp_home - kp_away) / 11
-                # Blend 50/50
-                raw_spread = (elo_spread * 0.5) + (kp_spread * 0.5)
+                kp_spread = (kp_home - kp_away) / KENPOM_DIVISOR
+                raw_spread = (elo_spread * (1 - KENPOM_WEIGHT)) + (kp_spread * KENPOM_WEIGHT)
             else:
                 raw_spread = elo_spread
 
             # Apply team-specific home court advantage
-            DEFAULT_HCA = 3.03
-            hca_adjustment = hca_dict.get(home, DEFAULT_HCA)
+            hca_adjustment = hca_dict.get(home, HCA_DEFAULT)
 
             # Apply recent form adjustment
             home_form = form_dict.get(home, 0)
             away_form = form_dict.get(away, 0)
-            form_adjustment = (home_form - away_form) / 25
+            form_adjustment = (home_form - away_form) / FORM_WEIGHT
 
             our_spread = raw_spread + hca_adjustment - form_adjustment
 
@@ -571,6 +739,36 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
             else:
                 edge_size = round(model_margin + vegas_margin, 1)
                 note = " (UPSET ALERT)"
+
+            # Sharp money adjustment
+            # Check if Action Network has data for this game
+            sharp_boost = 0
+            for skey, sval in sharp_data.items():
+                home_short = home_kenpom.split()[-1].lower()
+                away_short = away_kenpom.split()[-1].lower()
+                if home_short in skey.lower() and away_short in skey.lower():
+                    if sval['away_bets'] == 0:
+                        break
+                    # Figure out which side our model likes
+                    bet_team = away_kenpom if model_favors == away else home_kenpom
+                    bet_is_away = model_favors == away
+
+                    # Sharp money %
+                    bet_money = sval['away_money'] if bet_is_away else sval['home_money']
+                    bet_bets = sval['away_bets'] if bet_is_away else sval['home_bets']
+                    sharp_diff = bet_money - bet_bets
+
+                    if sharp_diff >= 15:
+                        # Sharp money agrees with our model - boost edge
+                        sharp_boost = 2.0
+                        note += " ⚡SHARP"
+                    elif sharp_diff <= -15:
+                        # Sharp money disagrees - reduce edge
+                        sharp_boost = -2.0
+                        note += " ⚠️FADE"
+                    break
+
+            edge_size = round(edge_size + sharp_boost, 1)
             if edge_size >= 3:
                 edges.append({
                     "away": away,
@@ -606,6 +804,9 @@ with st.spinner("Building ELO model..."):
 
 tab1, tab2, tab3 = st.tabs(["Tonights Edges", "Pick Tracker", "ELO Rankings"])
 
+# Load sharp data
+sharp_data = get_sharp_data()
+
 with tab1:
     st.subheader("Tonights Edges")
     if st.button("Refresh Odds"):
@@ -621,7 +822,8 @@ with tab1:
     )
 
     with st.spinner("Fetching live odds..."):
-        edges = get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_filter)
+        sharp_data = get_sharp_data()
+        edges = get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_filter, sharp_data)
     if not edges:
         st.info("No edges found tonight or no games available.")
     else:
@@ -636,6 +838,20 @@ with tab1:
                     st.metric("Model Favors", f"{e['model_favors']} by {e['model_margin']}")
                 with col3:
                     st.metric("Vegas Favors", f"{e['vegas_favors']} by {e['vegas_margin']}")
+                # Show sharp data if available
+                for skey, sval in sharp_data.items():
+                    home_short = e['home'].split()[-1].lower()
+                    away_short = e['away'].split()[-1].lower()
+                    if home_short in skey.lower() or away_short in skey.lower():
+                        col_s1, col_s2 = st.columns(2)
+                        with col_s1:
+                            st.caption(f"🏈 Bets: {sval['away_bets']}% Away | {sval['home_bets']}% Home")
+                        with col_s2:
+                            st.caption(f"💰 Money: {sval['away_money']}% Away | {sval['home_money']}% Home")
+                        if sval['sharp_team']:
+                            st.warning(f"⚡ SHARP MONEY: {sval['sharp_team']} (+{sval['sharp_diff']}% money vs bets)")
+                        break
+
                 if st.button(f"Log Pick: {e['model_favors'] if 'UPSET' in e.get('note', '') else (e['away'] if e['model_favors'] == e['home'] else e['home'])}", key=f"log_{e['away']}_{e['home']}"):
                     picks = load_picks()
                     picks.append({
@@ -671,14 +887,14 @@ with tab2:
     col4.metric("Pending", len(pending))
     if pending:
         st.subheader("Settle Pending Picks")
-        for p in pending:
+        for i, p in enumerate(pending):
             with st.expander(f"{p['date']} | {p['away']} @ {p['home']} -> {p['edge_team']}"):
                 margin = st.number_input(
                     "Final margin (positive = home won, negative = away won)",
-                    key=f"margin_{p['away']}_{p['home']}",
+                    key=f"margin_{i}_{p['away']}_{p['home']}",
                     value=0
                 )
-                if st.button("Settle", key=f"settle_{p['away']}_{p['home']}"):
+                if st.button("Settle", key=f"settle_{i}_{p['away']}_{p['home']}"):
                     vegas_spread = -p["vegas_margin"] if p["vegas_favors"] == p["home"] else p["vegas_margin"]
                     if p["edge_team"] == p["home"]:
                         covered = margin > vegas_spread
