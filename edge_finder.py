@@ -712,16 +712,15 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
             away_games = game_counts.get(away, 0)
             if home_games < 20 or away_games < 20:
                 continue
-            # ELO spread
-            elo_spread = (elo_ratings.get(home, STARTING_ELO) - elo_ratings.get(away, STARTING_ELO)) / ELO_DIVISOR
-
-            # KenPom spread
+            # KenPom regression model (RMSE 10.70)
             kp_home = kenpom_dict.get(home_kenpom, None)
             kp_away = kenpom_dict.get(away_kenpom, None)
             if kp_home is not None and kp_away is not None:
-                kp_spread = (kp_home - kp_away) / KENPOM_DIVISOR
-                raw_spread = (elo_spread * (1 - KENPOM_WEIGHT)) + (kp_spread * KENPOM_WEIGHT)
+                em_diff = kp_home - kp_away
+                raw_spread = 0.8072 * em_diff
             else:
+                # Fallback to ELO if no KenPom data
+                elo_spread = (elo_ratings.get(home, STARTING_ELO) - elo_ratings.get(away, STARTING_ELO)) / ELO_DIVISOR
                 raw_spread = elo_spread
 
             # Apply team-specific home court advantage
