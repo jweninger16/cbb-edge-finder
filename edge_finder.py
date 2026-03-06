@@ -649,9 +649,18 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
         now_utc = datetime.now(timezone.utc)
         hours_until = (game_dt - now_utc).total_seconds() / 3600
 
-        if date_filter == "Today" and not (0 <= hours_until <= 24):
+        from datetime import timezone as tz
+        import pytz
+        central = pytz.timezone("US/Central")
+        game_dt_central = game_dt.astimezone(central)
+        now_central = datetime.now(tz.utc).astimezone(central)
+        game_date = game_dt_central.date()
+        today_date = now_central.date()
+        tomorrow_date = today_date + timedelta(days=1)
+
+        if date_filter == "Today" and not (game_date == today_date and hours_until >= 0):
             continue
-        if date_filter == "Tomorrow" and not (24 < hours_until <= 48):
+        if date_filter == "Tomorrow" and not (game_date == tomorrow_date):
             continue
 
         home_kenpom = translate_name(game["home_team"])
