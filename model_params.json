@@ -6,7 +6,10 @@
   "kenpom_weight": 0.39010459991758406,
   "hca_default": 3.9433891906672063,
   "form_weight": 13.711527187363622,
-  "last_updated": "2026-03-02",
-  "training_rmse": 12.61,
-  "validation_rmse": 12.29
+  "last_updated": "2026-03-05",
+  "training_rmse": 10.7,
+  "validation_rmse": 10.7,
+  "kenpom_coef": 0.8072,
+  "kenpom_intercept": 3.1058482211827648e-18,
+  "kenpom_rmse": 10.7
 }
