@@ -733,7 +733,15 @@ def get_edges(elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict, date_f
                 raw_spread = elo_spread
 
             # Apply team-specific home court advantage
-            hca_adjustment = hca_dict.get(home, HCA_DEFAULT)
+            # Remove HCA during tournament weeks (neutral sites)
+            from datetime import date
+            today = date.today()
+            conf_tourney = date(2026, 3, 4) <= today <= date(2026, 3, 15)
+            ncaa_tourney = date(2026, 3, 19) <= today <= date(2026, 4, 6)
+            if conf_tourney or ncaa_tourney:
+                hca_adjustment = 0
+            else:
+                hca_adjustment = hca_dict.get(home, HCA_DEFAULT)
 
             # Apply recent form adjustment
             home_form = form_dict.get(home, 0)
