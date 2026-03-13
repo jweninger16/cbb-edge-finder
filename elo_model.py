@@ -1,11 +1,11 @@
 """
-ELO rating engine + KenPom loader.
+ELO rating engine + efficiency ratings loader.
 
 Improvements over v1:
   • Season-boundary ELO regression (handles roster turnover)
   • Margin-weighted recent form (not just W/L)
   • Last-game tracking for rest-day calculations
-  • Full KenPom data (O, D, tempo) — not just efficiency margin
+  • Auto-fetches fresh Barttorvik ratings (falls back to KenPom CSV)
 
 Public API:
     build_elo_model() → ModelData (named tuple)
@@ -21,7 +21,6 @@ from config import (
     COMBINED_CSV,
     FORM_LOOKBACK_DAYS,
     K_FACTOR,
-    KENPOM_CSV,
     MIN_FORM_GAMES,
     MIN_HCA_GAMES,
     RECENCY_DECAY,
@@ -29,7 +28,6 @@ from config import (
     SEASON_START_MONTH,
     STARTING_ELO,
 )
-from name_maps import KENPOM_CSV_HARMONIZE
 
 
 class ModelData(NamedTuple):
@@ -156,8 +154,9 @@ def build_elo_model() -> ModelData:
         last_game_dict[row.team] = row.date
         last_game_dict[row.opponent] = row.date
 
-    # ── KenPom data (full: O, D, tempo) ─────────────────────────────────
-    kenpom_dict = _load_kenpom()
+    # ── Efficiency ratings (auto-fetch from Barttorvik, fallback to KenPom CSV)
+    from ratings_fetch import fetch_ratings
+    kenpom_dict = fetch_ratings()
 
     return ModelData(
         elo_ratings=elo_ratings,
@@ -168,33 +167,3 @@ def build_elo_model() -> ModelData:
         last_game_dict=last_game_dict,
     )
 
-
-def _load_kenpom() -> dict[str, dict]:
-    """
-    Load full KenPom data. Returns dict of:
-        team → {"adj_em": float, "adj_o": float, "adj_d": float, "adj_t": float}
-    """
-    try:
-        kp = pd.read_csv(KENPOM_CSV)
-        kp.columns = ["team", "conf", "record", "adj_em", "adj_o", "adj_o_rank", "adj_d", "adj_t"]
-        for col in ("adj_em", "adj_o", "adj_d", "adj_t"):
-            kp[col] = pd.to_numeric(kp[col], errors="coerce")
-
-        kp_dict: dict[str, dict] = {}
-        for _, row in kp.iterrows():
-            kp_dict[row["team"]] = {
-                "adj_em": row["adj_em"],
-                "adj_o": row["adj_o"],
-                "adj_d": row["adj_d"],
-                "adj_t": row["adj_t"],
-            }
-
-        # Add alternate-name aliases
-        for alt, kp_name in KENPOM_CSV_HARMONIZE.items():
-            if kp_name in kp_dict:
-                kp_dict[alt] = kp_dict[kp_name]
-
-        return kp_dict
-    except (FileNotFoundError, pd.errors.EmptyDataError) as exc:
-        print(f"KenPom data unavailable: {exc}")
-        return {}

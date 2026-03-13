@@ -167,7 +167,7 @@ def get_edges(
             edge_size = round(model_margin + vegas_margin, 1)
             note = " (UPSET ALERT)"
 
-        # ── Sharp money adjustment ───────────────────────────────────────
+        # ── Sharp money indicator (display only, no spread adjustment) ───
         sharp_boost = _check_sharp(
             sharp_data, home_kp, away_kp, home_elo, away_elo, model_favors
         )
@@ -175,7 +175,6 @@ def get_edges(
             note += " ⚡SHARP"
         elif sharp_boost < 0:
             note += " ⚠️FADE"
-        edge_size = round(edge_size + sharp_boost, 1)
 
         # ── Threshold filter ─────────────────────────────────────────────
         if edge_size >= EDGE_MINIMUM:
