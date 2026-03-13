@@ -31,6 +31,14 @@ TRACKER_FILE = DATA_DIR / "pick_tracker.json"
 # ── API keys ─────────────────────────────────────────────────────────────────
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "4ad99d9b0d88ecf91a5ae129e36fdf65")
 
+# ── Google Sheets pick tracker ───────────────────────────────────────────────
+# Paste your Google Sheet URL here (or set GOOGLE_SHEET_URL env var).
+# Leave as-is to use local JSON file only.
+GOOGLE_SHEET_URL = os.environ.get(
+    "GOOGLE_SHEET_URL",
+    "PASTE_YOUR_GOOGLE_SHEET_URL_HERE",
+)
+
 # ── Model defaults (overridden by model_params.json if present) ──────────────
 STARTING_ELO = 1500
 
@@ -40,8 +48,8 @@ _DEFAULTS = {
     "elo_divisor": 10.0,
     "kenpom_divisor": 5.0,
     "kenpom_weight": 0.39,
-    "hca_default": 3.94,
-    "form_weight": 13.71,
+    "hca_default": 2.5,
+    "form_weight": 20.0,
 }
 
 
@@ -64,14 +72,16 @@ RECENCY_DECAY = PARAMS["recency_decay"]
 ELO_DIVISOR = PARAMS["elo_divisor"]
 KENPOM_DIVISOR = PARAMS["kenpom_divisor"]
 KENPOM_WEIGHT = PARAMS["kenpom_weight"]
-HCA_DEFAULT = PARAMS["hca_default"]
-FORM_WEIGHT = PARAMS["form_weight"]
+
+# These override model_params.json — tuned from backtest results
+HCA_DEFAULT = 1.5        # was 2.5 — still had +2.74 bias, pushing lower
+FORM_WEIGHT = 20.0       # was 13.71 — dampen form to reduce noise
 
 # ── Ensemble blending ────────────────────────────────────────────────────────
-# Weight for KenPom vs ELO when both available (must sum to 1.0).
-# KenPom is the stronger signal; ELO adds stability + captures info
-# that KenPom's preseason ratings may miss mid-season.
-ENSEMBLE_KENPOM_WEIGHT = 0.80
+# With only 1 season of data, ELO starts cold at 1500 for every team.
+# Barttorvik/KenPom carries almost all the signal. ELO needs multiple
+# seasons to be useful — keep it minimal until historical data is added.
+ENSEMBLE_KENPOM_WEIGHT = 0.92
 ENSEMBLE_ELO_WEIGHT = 1.0 - ENSEMBLE_KENPOM_WEIGHT
 
 # ── ELO season handling ─────────────────────────────────────────────────────
@@ -82,9 +92,9 @@ SEASON_REGRESS_FRACTION = 0.40
 SEASON_START_MONTH = 11  # November
 
 # ── Rest / fatigue ───────────────────────────────────────────────────────────
-B2B_PENALTY = 1.5        # back-to-back (0–1 days rest)
-SHORT_REST_PENALTY = 0.5  # 2 days rest
-LONG_REST_BONUS = 0.5     # 7+ days rest (bye week)
+B2B_PENALTY = 1.0        # back-to-back (0–1 days rest)
+SHORT_REST_PENALTY = 0.3  # 2 days rest
+LONG_REST_BONUS = 0.3     # 7+ days rest (bye week)
 
 # ── Tournament dates (update yearly) ────────────────────────────────────────
 CONF_TOURNEY_START = date(2026, 3, 4)
@@ -100,6 +110,8 @@ SHARP_THRESHOLD = 15
 SHARP_BOOST = 2.0
 MIN_GAMES = 20
 MIN_HCA_GAMES = 10
+HCA_CAP = 3.5              # max team-specific HCA (prevent outliers)
+HCA_FLOOR = 0.0            # min (some teams have no real HCA)
 FORM_LOOKBACK_DAYS = 30
 MIN_FORM_GAMES = 3
 
