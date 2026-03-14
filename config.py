@@ -74,14 +74,15 @@ KENPOM_DIVISOR = PARAMS["kenpom_divisor"]
 KENPOM_WEIGHT = PARAMS["kenpom_weight"]
 
 # These override model_params.json — tuned from backtest results
-HCA_DEFAULT = 1.5        # was 2.5 — still had +2.74 bias, pushing lower
-FORM_WEIGHT = 20.0       # was 13.71 — dampen form to reduce noise
+HCA_DEFAULT = 1.5        # fixed from 3.94 — modern CBB HCA is ~1.5-2.5
+FORM_WEIGHT = 15.0       # was 20.0 — form streaks are a real edge vs Vegas
 
 # ── Ensemble blending ────────────────────────────────────────────────────────
-# With only 1 season of data, ELO starts cold at 1500 for every team.
-# Barttorvik/KenPom carries almost all the signal. ELO needs multiple
-# seasons to be useful — keep it minimal until historical data is added.
-ENSEMBLE_KENPOM_WEIGHT = 0.92
+# Barttorvik is the core, but ELO captures mid-season momentum and trajectory
+# that static efficiency ratings miss. 85/15 is the sweet spot with 1 season
+# of data — enough ELO to create disagreements with Vegas, not so much
+# that noisy early-season ratings hurt us.
+ENSEMBLE_KENPOM_WEIGHT = 0.85
 ENSEMBLE_ELO_WEIGHT = 1.0 - ENSEMBLE_KENPOM_WEIGHT
 
 # ── ELO season handling ─────────────────────────────────────────────────────
@@ -92,9 +93,9 @@ SEASON_REGRESS_FRACTION = 0.40
 SEASON_START_MONTH = 11  # November
 
 # ── Rest / fatigue ───────────────────────────────────────────────────────────
-B2B_PENALTY = 1.0        # back-to-back (0–1 days rest)
-SHORT_REST_PENALTY = 0.3  # 2 days rest
-LONG_REST_BONUS = 0.3     # 7+ days rest (bye week)
+B2B_PENALTY = 1.2        # back-to-back — Vegas often underprices fatigue
+SHORT_REST_PENALTY = 0.4  # 2 days rest
+LONG_REST_BONUS = 0.4     # 7+ days rest (bye week)
 
 # ── Tournament dates (update yearly) ────────────────────────────────────────
 CONF_TOURNEY_START = date(2026, 3, 4)
@@ -103,7 +104,7 @@ NCAA_TOURNEY_START = date(2026, 3, 19)
 NCAA_TOURNEY_END = date(2026, 4, 6)
 
 # ── Edge thresholds ──────────────────────────────────────────────────────────
-EDGE_MINIMUM = 3.0
+EDGE_MINIMUM = 2.0       # was 3.0 — lowered to surface more picks
 EDGE_HIGH = 7.0
 EDGE_MEDIUM = 5.0
 SHARP_THRESHOLD = 15

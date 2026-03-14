@@ -26,7 +26,9 @@ from config import (
     ENSEMBLE_ELO_WEIGHT,
     ENSEMBLE_KENPOM_WEIGHT,
     FORM_WEIGHT,
+    HCA_CAP,
     HCA_DEFAULT,
+    HCA_FLOOR,
     LONG_REST_BONUS,
     MIN_GAMES,
     NATIONAL_AVG_EFF,
@@ -140,7 +142,8 @@ def get_edges(
 
         # ── Adjustments ──────────────────────────────────────────────────
         # Home-court advantage (0 at neutral sites)
-        hca = 0.0 if is_neutral else hca_dict.get(home_elo, HCA_DEFAULT)
+        hca_raw = 0.0 if is_neutral else hca_dict.get(home_elo, HCA_DEFAULT)
+        hca = max(HCA_FLOOR, min(HCA_CAP, hca_raw))
 
         # Form: positive form_adj means home team is hotter → boost home spread
         # FIX: v1 had this subtracted (inverted). Now correctly added.
@@ -178,6 +181,12 @@ def get_edges(
 
         # ── Threshold filter ─────────────────────────────────────────────
         if edge_size >= EDGE_MINIMUM:
+            # Convert game time to Central (cross-platform formatting)
+            game_cst = game_dt.astimezone(_CENTRAL)
+            hour = game_cst.hour % 12 or 12
+            minute = game_cst.strftime("%M")
+            ampm = "AM" if game_cst.hour < 12 else "PM"
+            game_time_cst = f"{hour}:{minute} {ampm} CST"
             edges.append({
                 "away": away_elo,
                 "home": home_elo,
@@ -187,10 +196,12 @@ def get_edges(
                 "vegas_margin": round(vegas_margin, 1),
                 "edge_size": edge_size,
                 "note": note,
+                "game_time": game_time_cst,
                 "confidence": (
                     "HIGH" if edge_size >= EDGE_HIGH
                     else "MEDIUM" if edge_size >= EDGE_MEDIUM
-                    else "LOW"
+                    else "LOW" if edge_size >= 3.0
+                    else "LEAN"
                 ),
             })
 

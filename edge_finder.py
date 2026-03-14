@@ -131,7 +131,8 @@ with tab1:
             with st.container():
                 col1, col2, col3 = st.columns([3, 2, 2])
                 with col1:
-                    st.markdown(f"**{e['away']} @ {e['home']}**")
+                    time_str = f" — {e['game_time']}" if e.get('game_time') else ""
+                    st.markdown(f"**{e['away']} @ {e['home']}**{time_str}")
                     st.caption(f"{e['confidence']}{e['note']} | Edge: {e['edge_size']} pts")
                 with col2:
                     st.metric("Model Favors", f"{e['model_favors']} by {e['model_margin']}")
