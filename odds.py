@@ -285,6 +285,7 @@ def get_edges(
                 "edge_size": edge_size,
                 "note": note,
                 "game_time": game_time_cst,
+                "game_date": game_date.isoformat(),
                 "confidence": (
                     "HIGH" if edge_size >= EDGE_HIGH
                     else "MEDIUM" if edge_size >= EDGE_MEDIUM

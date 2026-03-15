@@ -1,25 +1,23 @@
 """
-Post yesterday's results + today's edges to Discord via webhook.
+Post yesterday's results + today's (and upcoming) edges to Discord.
 
-Recommended schedule:
-  8:00 AM  — early picks (recap + whatever lines are available)
-  11:00 AM — new picks only (filters out anything already sent at 8 AM)
+Features:
+  • NCAA tournament mode: scans Thursday/Friday/Saturday/Sunday lookahead
+  • Auto-logs picks when sent (no duplicates)
+  • Confidence breakdown in morning recap (W-L by HIGH/MED/LOW/LEAN)
+  • Deduplicates — won't send the same game twice in a day
 
-Tracks which games were already posted today in sent_today.json.
-Resets automatically each new day.
+Schedule:
+  8:00 AM  — recap + early picks
+  11:00 AM — new picks only (filters out 8 AM duplicates)
 
-Run via Task Scheduler or manually:  python discord_post.py
-
-Setup:
-  1. In Discord: Server Settings → Integrations → Webhooks → New Webhook
-  2. Copy the webhook URL
-  3. Paste it below or set the DISCORD_WEBHOOK_URL environment variable
+Run:  python discord_post.py
 """
 
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -37,10 +35,19 @@ _SENT_FILE = Path(__file__).parent / "sent_today.json"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from auto_settle import auto_settle_picks
+from config import NCAA_TOURNEY_END, NCAA_TOURNEY_START
 from elo_model import build_elo_model
 from odds import get_edges
 from sharp import get_sharp_data
-from tracker import load_picks
+from tracker import load_picks, save_picks
+
+
+# ── Tournament detection ─────────────────────────────────────────────────────
+
+def _is_ncaa_tournament() -> bool:
+    """True if we're in the NCAA tournament window."""
+    today = date.today()
+    return NCAA_TOURNEY_START <= today <= NCAA_TOURNEY_END
 
 
 # ── Sent-game tracking ───────────────────────────────────────────────────────
@@ -50,7 +57,6 @@ def _load_sent() -> set[str]:
     try:
         with open(_SENT_FILE, "r") as f:
             data = json.load(f)
-        # Reset if it's a different day
         if data.get("date") != datetime.now().strftime("%Y-%m-%d"):
             return set()
         return set(data.get("games", []))
@@ -60,7 +66,6 @@ def _load_sent() -> set[str]:
 
 def _save_sent(game_keys: set[str]) -> None:
     """Save game keys sent today."""
-    # Merge with any existing (in case another run happened)
     existing = _load_sent()
     merged = existing | game_keys
     with open(_SENT_FILE, "w") as f:
@@ -73,6 +78,49 @@ def _save_sent(game_keys: set[str]) -> None:
 def _game_key(edge: dict) -> str:
     """Unique key for a game."""
     return f"{edge['away']}_{edge['home']}"
+
+
+# ── Auto-log picks ──────────────────────────────────────────────────────────
+
+def _auto_log_picks(edges: list[dict]) -> int:
+    """
+    Log edges as picks in the tracker. Skips duplicates.
+    Returns number of newly logged picks.
+    """
+    if not edges:
+        return 0
+
+    picks = load_picks()
+    existing_keys = {f"{p['away']}_{p['home']}" for p in picks}
+    logged = 0
+
+    for e in edges:
+        key = _game_key(e)
+        if key in existing_keys:
+            continue  # Already logged — skip
+
+        pick_team = get_edge_team(e)
+        picks.append({
+            "date": e.get("game_date", datetime.now().strftime("%Y-%m-%d")),
+            "away": e["away"],
+            "home": e["home"],
+            "edge_team": pick_team,
+            "model_margin": e["model_margin"],
+            "vegas_margin": e["vegas_margin"],
+            "vegas_favors": e["vegas_favors"],
+            "edge_size": e["edge_size"],
+            "confidence": e["confidence"],
+            "bet_amount": 100,
+            "result": None,
+            "profit": None,
+        })
+        existing_keys.add(key)
+        logged += 1
+
+    if logged > 0:
+        save_picks(picks)
+
+    return logged
 
 
 # ── Yesterday's recap ────────────────────────────────────────────────────────
@@ -113,6 +161,43 @@ def build_recap() -> str:
     return f"{header}\n" + "\n".join(lines) + "\n"
 
 
+# ── Season record with confidence breakdown ──────────────────────────────────
+
+def build_season_record() -> str:
+    """Season summary with record broken down by confidence tier."""
+    picks = load_picks()
+    settled = [p for p in picks if p.get("result")]
+
+    if len(settled) < 2:
+        return ""
+
+    wins = sum(1 for p in settled if p["result"] == "W")
+    losses = sum(1 for p in settled if p["result"] == "L")
+
+    lines = [f"📈 **Season: {wins}W-{losses}L**"]
+
+    # Confidence breakdown
+    tiers = ["HIGH", "MEDIUM", "LOW", "LEAN"]
+    tier_lines = []
+    for tier in tiers:
+        tier_picks = [p for p in settled if p.get("confidence") == tier]
+        if not tier_picks:
+            continue
+        tw = sum(1 for p in tier_picks if p["result"] == "W")
+        tl = sum(1 for p in tier_picks if p["result"] == "L")
+        tp = sum(1 for p in tier_picks if p["result"] == "P")
+        total = tw + tl + tp
+        pct = (tw / (tw + tl) * 100) if (tw + tl) > 0 else 0
+        emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢", "LEAN": "⚪"}.get(tier, "")
+        push_str = f"-{tp}P" if tp else ""
+        tier_lines.append(f"{emoji} {tier}: {tw}W-{tl}L{push_str} ({pct:.0f}%)")
+
+    if tier_lines:
+        lines.append("  " + " | ".join(tier_lines))
+
+    return "\n".join(lines)
+
+
 # ── Today's edges ────────────────────────────────────────────────────────────
 
 def get_edge_team(e: dict) -> str:
@@ -142,27 +227,48 @@ def format_edge(e: dict) -> str:
     )
 
 
-def build_edges_message(edges: list[dict], is_update: bool = False) -> str:
-    """Build today's edges message."""
+def _day_label(game_date_str: str) -> str:
+    """
+    Return a human-readable label for the game date.
+    'today', 'tomorrow', or the day name like 'Thursday'.
+    """
+    try:
+        game_date = date.fromisoformat(game_date_str)
+    except (ValueError, TypeError):
+        return "upcoming"
+
+    today = date.today()
+    diff = (game_date - today).days
+
+    if diff == 0:
+        return "today"
+    elif diff == 1:
+        return "tomorrow"
+    else:
+        return game_date.strftime("%A")  # "Thursday", "Friday", etc.
+
+
+def build_edges_message(edges: list[dict], is_update: bool = False, day_label: str = "") -> str:
+    """Build edges message, optionally labeled for a specific day."""
     date_str = datetime.now().strftime("%A, %B %d")
 
     if not edges:
         if is_update:
-            return ""  # Don't post "no new edges" for the update run
+            return ""
         return f"🏀 **Today's Edges — {date_str}**\n\nNo edges found for today."
 
-    if is_update:
-        header = (
-            f"🏀 **New Edges — {date_str}** (update)\n"
-            f"Found **{len(edges)}** new edge(s)!\n"
-            f"───────────────────────────"
-        )
+    if day_label and day_label != "today":
+        title = f"Edges for {day_label.title()}'s games"
+    elif is_update:
+        title = f"New Edges — {date_str} (update)"
     else:
-        header = (
-            f"🏀 **Today's Edges — {date_str}**\n"
-            f"Found **{len(edges)}** edge(s) today!\n"
-            f"───────────────────────────"
-        )
+        title = f"Today's Edges — {date_str}"
+
+    header = (
+        f"🏀 **{title}**\n"
+        f"Found **{len(edges)}** edge(s)!\n"
+        f"───────────────────────────"
+    )
 
     edge_lines = [format_edge(e) for e in edges]
 
@@ -172,22 +278,6 @@ def build_edges_message(edges: list[dict], is_update: bool = False) -> str:
     )
 
     return f"{header}\n\n" + "\n\n".join(edge_lines) + f"\n\n{footer}"
-
-
-# ── Season record ────────────────────────────────────────────────────────────
-
-def build_season_record() -> str:
-    """One-line season summary."""
-    picks = load_picks()
-    settled = [p for p in picks if p.get("result")]
-
-    if len(settled) < 2:
-        return ""
-
-    wins = sum(1 for p in settled if p["result"] == "W")
-    losses = sum(1 for p in settled if p["result"] == "L")
-
-    return f"📈 **Season: {wins}W-{losses}L**"
 
 
 # ── Discord sending ──────────────────────────────────────────────────────────
@@ -241,8 +331,7 @@ def _split_message(message: str, max_len: int) -> list[str]:
 def main():
     print(f"[{datetime.now().strftime('%I:%M %p')}] CBB Edge Finder — Discord Post")
 
-    # Part 1: Yesterday's recap (auto-settles first)
-    # Only post recap on the first run of the day
+    # ── Part 1: Yesterday's recap ────────────────────────────────────────
     already_sent = _load_sent()
     is_update = len(already_sent) > 0
 
@@ -255,52 +344,107 @@ def main():
         else:
             print("No settled picks from yesterday.")
 
-    # Part 2: Today's edges
+    # ── Part 2: Fetch edges ──────────────────────────────────────────────
     print("Building model...")
     model = build_elo_model()
 
     print("Fetching odds and sharp data...")
     sharp_data = get_sharp_data()
+
+    is_tourney = _is_ncaa_tournament()
+
+    # During NCAA tournament: fetch ALL available games (multi-day lookahead)
+    # Regular season: fetch Today only
+    date_filter = "All" if is_tourney else "Today"
+
     all_edges = get_edges(
         model.elo_ratings,
         model.game_counts,
         model.hca_dict,
         model.form_dict,
         model.kenpom_dict,
-        date_filter="Today",
+        date_filter=date_filter,
         sharp_data=sharp_data,
         last_game_dict=model.last_game_dict,
     )
 
     # Filter out already-sent games
     new_edges = [e for e in all_edges if _game_key(e) not in already_sent]
-    total_found = len(all_edges)
-    new_count = len(new_edges)
 
     if is_update:
-        print(f"Found {total_found} total edge(s), {new_count} new since last post.")
+        print(f"Found {len(all_edges)} total, {len(new_edges)} new since last post.")
     else:
-        print(f"Found {new_count} edge(s).")
+        print(f"Found {len(new_edges)} edge(s).")
 
-    # Build and send message
-    edges_msg = build_edges_message(new_edges, is_update=is_update)
+    if not new_edges:
+        print("No new edges to post.")
+        # Still post season record on first run
+        if not is_update:
+            season = build_season_record()
+            if season:
+                send_to_discord(season)
+        return
 
-    if edges_msg:
+    # ── Part 3: Post edges (grouped by day during tournament) ────────────
+    if is_tourney:
+        # Group edges by game date
+        from collections import defaultdict
+        day_groups = defaultdict(list)
+        for e in new_edges:
+            gd = e.get("game_date", date.today().isoformat())
+            day_groups[gd].append(e)
+
+        # Sort days chronologically
+        sorted_days = sorted(day_groups.keys())
+        all_posted_keys = set()
+
+        for game_day in sorted_days:
+            day_edges = day_groups[game_day]
+            label = _day_label(game_day)
+
+            print(f"Posting {len(day_edges)} edge(s) for {label} ({game_day})...")
+            msg = build_edges_message(day_edges, is_update=is_update, day_label=label)
+
+            if msg:
+                if send_to_discord(msg):
+                    all_posted_keys |= {_game_key(e) for e in day_edges}
+                    # Auto-log picks
+                    logged = _auto_log_picks(day_edges)
+                    if logged:
+                        print(f"  Auto-logged {logged} pick(s)")
+
+        # Save all sent keys
+        if all_posted_keys:
+            _save_sent(all_posted_keys)
+
+    else:
+        # Regular season: single message
+        msg = build_edges_message(new_edges, is_update=is_update)
+
+        if msg:
+            season = build_season_record()
+            if season:
+                msg += f"\n\n{season}"
+
+            print("Posting to Discord...")
+            if send_to_discord(msg):
+                print("Posted successfully!")
+                _save_sent({_game_key(e) for e in new_edges})
+                # Auto-log picks
+                logged = _auto_log_picks(new_edges)
+                if logged:
+                    print(f"Auto-logged {logged} pick(s)")
+            else:
+                print("Failed to post.")
+                sys.exit(1)
+
+    # ── Part 4: Season record (tournament mode — post after all days) ────
+    if is_tourney:
         season = build_season_record()
         if season:
-            edges_msg += f"\n\n{season}"
+            send_to_discord(season)
 
-        print("Posting to Discord...")
-        if send_to_discord(edges_msg):
-            print("Posted successfully!")
-            # Save these games as sent
-            new_keys = {_game_key(e) for e in new_edges}
-            _save_sent(new_keys)
-        else:
-            print("Failed to post.")
-            sys.exit(1)
-    else:
-        print("No new edges to post.")
+    print("Done!")
 
 
 if __name__ == "__main__":
