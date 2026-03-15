@@ -152,6 +152,7 @@ def get_edges(
     date_filter: str = "All",
     sharp_data: dict | None = None,
     last_game_dict: dict | None = None,
+    volatility_dict: dict | None = None,
 ) -> list[dict]:
     """
     Compare ensemble model spread to Vegas and return edges ≥ EDGE_MINIMUM pts.
@@ -160,6 +161,8 @@ def get_edges(
         sharp_data = {}
     if last_game_dict is None:
         last_game_dict = {}
+    if volatility_dict is None:
+        volatility_dict = {}
 
     try:
         odds_data = fetch_odds()
@@ -238,7 +241,16 @@ def get_edges(
         # Conference bias: during tournaments, adjust for measured over/underrating
         conf_adj = _conf_bias_adjustment(home_elo, away_elo, is_tourney=is_neutral)
 
-        our_spread = raw_spread + hca + form_adj + rest_adj + conf_adj
+        # Upset factors: during tournaments, adjust for volatility & tempo mismatch
+        # These favor the underdog in single-elimination scenarios
+        upset_adj, upset_note = _upset_factors(
+            home_elo, away_elo, home_kp, away_kp,
+            raw_spread + hca,  # preliminary spread to determine underdog
+            volatility_dict, kenpom_dict,
+            is_tourney=is_neutral,
+        )
+
+        our_spread = raw_spread + hca + form_adj + rest_adj + conf_adj + upset_adj
 
         model_favors = away_elo if our_spread < 0 else home_elo
         model_margin = abs(our_spread)
@@ -266,6 +278,10 @@ def get_edges(
         # Conference bias indicator
         if abs(conf_adj) >= 0.5:
             note += " 🏆CONF"
+
+        # Upset factor indicator
+        if upset_note:
+            note += f" {upset_note}"
 
         # ── Threshold filter ─────────────────────────────────────────────
         if edge_size >= EDGE_MINIMUM:
@@ -407,6 +423,104 @@ def _rest_value(days: int) -> float:
     elif days >= 7:
         return LONG_REST_BONUS
     return 0.0
+
+
+# ── Upset factors (tournament only) ─────────────────────────────────────────
+
+# Average D1 margin volatility (std dev) is roughly 12-14 pts.
+# Above 15 = high-variance / volatile team.
+_AVG_VOLATILITY = 13.0
+
+# Tempo mismatch: how many possessions difference triggers an adjustment
+_TEMPO_MISMATCH_THRESHOLD = 4.0  # possessions per game difference
+
+
+def _upset_factors(
+    home_elo: str, away_elo: str,
+    home_kp: str, away_kp: str,
+    prelim_spread: float,
+    volatility_dict: dict,
+    kenpom_dict: dict,
+    is_tourney: bool,
+) -> tuple[float, str]:
+    """
+    Compute upset-favoring adjustments for single-elimination tournament games.
+    Returns (spread_adjustment, note_string).
+
+    Adjustment is toward the underdog (shrinks the spread).
+
+    Two factors:
+      1. Volatility: high-variance underdogs are more dangerous
+      2. Tempo mismatch: slow underdogs suppress possessions = more randomness
+    """
+    if not is_tourney:
+        return 0.0, ""
+
+    # Determine who's the underdog based on preliminary spread
+    # prelim_spread > 0 means home is favored → away is underdog
+    if abs(prelim_spread) < 1.0:
+        return 0.0, ""  # Toss-up game, no upset factor needed
+
+    if prelim_spread > 0:
+        fav, dog = home_elo, away_elo
+        fav_kp_name, dog_kp_name = home_kp, away_kp
+        dog_is_away = True
+    else:
+        fav, dog = away_elo, home_elo
+        fav_kp_name, dog_kp_name = away_kp, home_kp
+        dog_is_away = False
+
+    adjustment = 0.0
+    tags = []
+
+    # ── 1. Volatility ────────────────────────────────────────────────────
+    # If the underdog has above-average volatility, they have a higher
+    # ceiling and are more dangerous in a one-game sample.
+    # Max adjustment: 1.5 pts toward underdog
+    dog_vol = volatility_dict.get(dog, _AVG_VOLATILITY)
+    fav_vol = volatility_dict.get(fav, _AVG_VOLATILITY)
+
+    if dog_vol > _AVG_VOLATILITY:
+        # Scale: every 3 pts of excess volatility = ~0.5 pts toward underdog
+        vol_excess = dog_vol - _AVG_VOLATILITY
+        vol_adj = min(vol_excess / 3.0 * 0.5, 1.5)
+        adjustment += vol_adj
+        if vol_adj >= 0.3:
+            tags.append("🎲VOL")
+
+    # ── 2. Tempo mismatch ────────────────────────────────────────────────
+    # If the underdog plays significantly slower than the favorite,
+    # they will suppress possessions and shrink the game.
+    # Fewer possessions = more randomness = benefits the underdog.
+    # Max adjustment: 1.0 pts toward underdog
+    dog_kp = kenpom_dict.get(dog_kp_name, {})
+    fav_kp = kenpom_dict.get(fav_kp_name, {})
+
+    dog_tempo = dog_kp.get("adj_t") if isinstance(dog_kp, dict) else None
+    fav_tempo = fav_kp.get("adj_t") if isinstance(fav_kp, dict) else None
+
+    if dog_tempo is not None and fav_tempo is not None:
+        tempo_diff = fav_tempo - dog_tempo  # positive = dog plays slower
+        if tempo_diff > _TEMPO_MISMATCH_THRESHOLD:
+            # Scale: every 4 possessions of mismatch = ~0.5 pts toward underdog
+            tempo_adj = min((tempo_diff - _TEMPO_MISMATCH_THRESHOLD) / 4.0 * 0.5, 1.0)
+            adjustment += tempo_adj
+            if tempo_adj >= 0.2:
+                tags.append("🐢TEMPO")
+
+    if adjustment == 0.0:
+        return 0.0, ""
+
+    # Apply adjustment TOWARD the underdog (shrink the spread)
+    # If dog is away (spread is positive), subtract adjustment
+    # If dog is home (spread is negative), add adjustment
+    if dog_is_away:
+        spread_adj = -adjustment
+    else:
+        spread_adj = adjustment
+
+    note = " ".join(tags)
+    return round(spread_adj, 2), note
 
 
 # ── Neutral site ─────────────────────────────────────────────────────────────

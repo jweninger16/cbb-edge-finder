@@ -25,7 +25,7 @@ import requests
 # ── Your webhook URL (paste here or set env var) ─────────────────────────────
 DISCORD_WEBHOOK_URL = os.environ.get(
     "DISCORD_WEBHOOK_URL",
-    "PASTE_YOUR_WEBHOOK_URL_HERE",
+    "https://discord.com/api/webhooks/1481435085667565711/phjE5pvdap-R154usg83XE0-nBefqApzaFCW9XeALC24QwcKzSVhbw_Tfwm8wiuBy9pj",
 )
 
 # ── Sent-game tracking file ─────────────────────────────────────────────────
@@ -366,6 +366,7 @@ def main():
         date_filter=date_filter,
         sharp_data=sharp_data,
         last_game_dict=model.last_game_dict,
+        volatility_dict=model.volatility_dict,
     )
 
     # Filter out already-sent games

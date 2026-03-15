@@ -35,6 +35,7 @@ hca_dict = model.hca_dict
 form_dict = model.form_dict
 kenpom_dict = model.kenpom_dict
 last_game_dict = model.last_game_dict
+volatility_dict = model.volatility_dict
 
 
 # ── Helper functions ─────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ with tab1:
         sharp_data = get_sharp_data()
         edges = get_edges(
             elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict,
-            date_filter, sharp_data, last_game_dict,
+            date_filter, sharp_data, last_game_dict, volatility_dict,
         )
 
     if not edges:

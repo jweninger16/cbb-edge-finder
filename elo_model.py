@@ -37,6 +37,7 @@ class ModelData(NamedTuple):
     form_dict: dict            # team → margin-weighted recent form
     kenpom_dict: dict          # team → {adj_em, adj_o, adj_d, adj_t}
     last_game_dict: dict       # team → last game date (pd.Timestamp)
+    volatility_dict: dict      # team → std dev of scoring margins
 
 
 # ── ELO helpers ──────────────────────────────────────────────────────────────
@@ -154,6 +155,19 @@ def build_elo_model() -> ModelData:
         last_game_dict[row.team] = row.date
         last_game_dict[row.opponent] = row.date
 
+    # ── Volatility (std dev of scoring margins) ──────────────────────────
+    # High volatility = unpredictable team = more upset potential as underdog
+    team_margins: dict[str, list[float]] = {}
+    for row in df.itertuples(index=False):
+        m = row.team_score - row.opp_score
+        team_margins.setdefault(row.team, []).append(m)
+        team_margins.setdefault(row.opponent, []).append(-m)
+
+    volatility_dict: dict[str, float] = {}
+    for team, margins in team_margins.items():
+        if len(margins) >= 10:
+            volatility_dict[team] = round(float(np.std(margins)), 2)
+
     # ── Efficiency ratings (auto-fetch from Barttorvik, fallback to KenPom CSV)
     from ratings_fetch import fetch_ratings
     kenpom_dict = fetch_ratings()
@@ -165,5 +179,6 @@ def build_elo_model() -> ModelData:
         form_dict=form_dict,
         kenpom_dict=kenpom_dict,
         last_game_dict=last_game_dict,
+        volatility_dict=volatility_dict,
     )
 
