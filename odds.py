@@ -153,6 +153,7 @@ def get_edges(
     sharp_data: dict | None = None,
     last_game_dict: dict | None = None,
     volatility_dict: dict | None = None,
+    residual_dict: dict | None = None,
 ) -> list[dict]:
     """
     Compare ensemble model spread to Vegas and return edges ≥ EDGE_MINIMUM pts.
@@ -163,6 +164,8 @@ def get_edges(
         last_game_dict = {}
     if volatility_dict is None:
         volatility_dict = {}
+    if residual_dict is None:
+        residual_dict = {}
 
     try:
         odds_data = fetch_odds()
@@ -250,7 +253,13 @@ def get_edges(
             is_tourney=is_neutral,
         )
 
-        our_spread = raw_spread + hca + form_adj + rest_adj + conf_adj + upset_adj
+        # Residual correction: learn from past prediction mistakes
+        # Positive residual = we overrate this team → subtract from spread
+        home_residual = residual_dict.get(home_elo, 0.0)
+        away_residual = residual_dict.get(away_elo, 0.0)
+        residual_adj = -(home_residual - away_residual)
+
+        our_spread = raw_spread + hca + form_adj + rest_adj + conf_adj + upset_adj + residual_adj
 
         model_favors = away_elo if our_spread < 0 else home_elo
         model_margin = abs(our_spread)
@@ -282,6 +291,10 @@ def get_edges(
         # Upset factor indicator
         if upset_note:
             note += f" {upset_note}"
+
+        # Residual correction indicator
+        if abs(residual_adj) >= 1.0:
+            note += " 🧠LEARN"
 
         # ── Threshold filter ─────────────────────────────────────────────
         if edge_size >= EDGE_MINIMUM:

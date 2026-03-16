@@ -100,7 +100,7 @@ LONG_REST_BONUS = 0.4     # 7+ days rest (bye week)
 # ── Tournament dates (update yearly) ────────────────────────────────────────
 CONF_TOURNEY_START = date(2026, 3, 4)
 CONF_TOURNEY_END = date(2026, 3, 15)
-NCAA_TOURNEY_START = date(2026, 3, 16)   # moved up for play-in games (First Four)
+NCAA_TOURNEY_START = date(2026, 3, 15)   # includes Selection Sunday onward
 NCAA_TOURNEY_END = date(2026, 4, 6)
 
 # ── Edge thresholds ──────────────────────────────────────────────────────────

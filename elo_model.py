@@ -19,10 +19,19 @@ import pandas as pd
 
 from config import (
     COMBINED_CSV,
+    ELO_DIVISOR,
+    ENSEMBLE_ELO_WEIGHT,
+    ENSEMBLE_KENPOM_WEIGHT,
     FORM_LOOKBACK_DAYS,
+    FORM_WEIGHT,
+    HCA_CAP,
+    HCA_DEFAULT,
+    HCA_FLOOR,
     K_FACTOR,
     MIN_FORM_GAMES,
     MIN_HCA_GAMES,
+    MIN_GAMES,
+    NATIONAL_AVG_EFF,
     RECENCY_DECAY,
     SEASON_REGRESS_FRACTION,
     SEASON_START_MONTH,
@@ -38,6 +47,7 @@ class ModelData(NamedTuple):
     kenpom_dict: dict          # team → {adj_em, adj_o, adj_d, adj_t}
     last_game_dict: dict       # team → last game date (pd.Timestamp)
     volatility_dict: dict      # team → std dev of scoring margins
+    residual_dict: dict        # team → avg prediction error (positive = we overrate them)
 
 
 # ── ELO helpers ──────────────────────────────────────────────────────────────
@@ -172,6 +182,15 @@ def build_elo_model() -> ModelData:
     from ratings_fetch import fetch_ratings
     kenpom_dict = fetch_ratings()
 
+    # ── Prediction residuals (learning from mistakes) ────────────────────
+    # Walk through last 10 games per team, predict each using current model,
+    # and track how much we over/underestimate each team.
+    # Positive residual = we overrate them (predicted them too strong).
+    # This correction factor gets subtracted from future predictions.
+    residual_dict = _compute_residuals(
+        df, elo_ratings, game_counts, hca_dict, form_dict, kenpom_dict,
+    )
+
     return ModelData(
         elo_ratings=elo_ratings,
         game_counts=game_counts,
@@ -180,5 +199,135 @@ def build_elo_model() -> ModelData:
         kenpom_dict=kenpom_dict,
         last_game_dict=last_game_dict,
         volatility_dict=volatility_dict,
+        residual_dict=residual_dict,
     )
+
+
+# ── Residual tracking (learning from mistakes) ──────────────────────────────
+
+# How many recent games to look at per team
+_RESIDUAL_WINDOW = 10
+# How much of the measured residual to apply as correction (0-1)
+# 0.5 = apply half the error as correction. Conservative to avoid overfit.
+_RESIDUAL_CORRECTION_SCALE = 0.50
+
+
+def _compute_residuals(
+    df: pd.DataFrame,
+    elo_ratings: dict,
+    game_counts: dict,
+    hca_dict: dict,
+    form_dict: dict,
+    kenpom_dict: dict,
+) -> dict[str, float]:
+    """
+    For each team, look at their last N games, predict each using
+    the current model, and compute the average prediction error.
+
+    Returns dict of team → residual, where:
+      positive = we overrate this team (predict them too strong)
+      negative = we underrate this team (predict them too weak)
+
+    The calling code should SUBTRACT this from future predictions.
+    """
+    max_date = df["date"].max()
+
+    # Gather last N games per team (as home team in the data)
+    team_residuals: dict[str, list[float]] = {}
+
+    # Only look at recent games (last 45 days) to keep it current
+    lookback = max_date - timedelta(days=45)
+    recent = df[df["date"] >= lookback].copy()
+
+    for row in recent.itertuples(index=False):
+        team, opp = row.team, row.opponent
+
+        # Skip teams with too few total games
+        if game_counts.get(team, 0) < MIN_GAMES or game_counts.get(opp, 0) < MIN_GAMES:
+            continue
+
+        # ── Predict ──────────────────────────────────────────────────
+        predicted = _predict_margin(team, opp, elo_ratings, hca_dict, form_dict, kenpom_dict)
+        actual = row.team_score - row.opp_score
+
+        # Residual: how much we OVERESTIMATED the home team (team)
+        error = predicted - actual
+
+        # Attribute half to each team:
+        # If we predicted Home -8 but actual was Home -2, error = -6
+        # → we overrated Home by ~3 pts AND underrated Away by ~3 pts
+        team_residuals.setdefault(team, []).append(error / 2.0)
+        team_residuals.setdefault(opp, []).append(-error / 2.0)
+
+    # Average last N residuals per team
+    residual_dict: dict[str, float] = {}
+    for team, errors in team_residuals.items():
+        # Take only the most recent N
+        recent_errors = errors[-_RESIDUAL_WINDOW:]
+        if len(recent_errors) >= 5:  # need at least 5 games
+            avg_error = sum(recent_errors) / len(recent_errors)
+            # Apply scale factor to avoid overcorrection
+            correction = avg_error * _RESIDUAL_CORRECTION_SCALE
+            # Only store meaningful corrections (> 0.5 pts)
+            if abs(correction) >= 0.5:
+                residual_dict[team] = round(correction, 2)
+
+    if residual_dict:
+        # Show top corrections
+        sorted_r = sorted(residual_dict.items(), key=lambda x: x[1])
+        print(f"Residual corrections for {len(residual_dict)} teams "
+              f"(range: {sorted_r[0][1]:+.1f} to {sorted_r[-1][1]:+.1f})")
+
+    return residual_dict
+
+
+def _predict_margin(
+    home: str, away: str,
+    elo_ratings: dict, hca_dict: dict, form_dict: dict, kenpom_dict: dict,
+) -> float:
+    """
+    Predict home margin using current model components.
+    Same formula as odds.py but without rest/conf/upset adjustments
+    (those are game-specific, not team-specific).
+    """
+    # ELO component
+    elo_spread = (
+        elo_ratings.get(home, STARTING_ELO) -
+        elo_ratings.get(away, STARTING_ELO)
+    ) / ELO_DIVISOR
+
+    # Efficiency component
+    kp_home = kenpom_dict.get(home)
+    kp_away = kenpom_dict.get(away)
+
+    if kp_home and kp_away and isinstance(kp_home, dict) and isinstance(kp_away, dict):
+        h_o = kp_home.get("adj_o")
+        h_d = kp_home.get("adj_d")
+        h_t = kp_home.get("adj_t")
+        a_o = kp_away.get("adj_o")
+        a_d = kp_away.get("adj_d")
+        a_t = kp_away.get("adj_t")
+
+        if all(v is not None and v == v for v in (h_o, h_d, h_t, a_o, a_d, a_t)):
+            avg_eff = NATIONAL_AVG_EFF
+            game_tempo = (h_t + a_t) / 2.0
+            home_off = h_o * a_d / avg_eff
+            away_off = a_o * h_d / avg_eff
+            kp_spread = (home_off * game_tempo / 100.0) - (away_off * game_tempo / 100.0)
+            raw_spread = ENSEMBLE_KENPOM_WEIGHT * kp_spread + ENSEMBLE_ELO_WEIGHT * elo_spread
+        else:
+            raw_spread = elo_spread
+    else:
+        raw_spread = elo_spread
+
+    # HCA
+    hca_raw = hca_dict.get(home, HCA_DEFAULT)
+    hca = max(HCA_FLOOR, min(HCA_CAP, hca_raw))
+
+    # Form
+    home_form = form_dict.get(home, 0)
+    away_form = form_dict.get(away, 0)
+    form_adj = (home_form - away_form) / FORM_WEIGHT
+
+    return raw_spread + hca + form_adj
 
